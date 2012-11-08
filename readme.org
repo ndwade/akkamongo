@@ -1,0 +1,6 @@
+* Simple Akka Server with Actor per Client
+
+  Some code to try and parse mongo wire protocol using Akka iteratees.
+  I know there are a ton of scala/mongo libraries already, I'm just trying
+  to learn Akka and needed a problem to work on.
+
