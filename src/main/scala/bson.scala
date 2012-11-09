@@ -4,6 +4,7 @@ import akka.actor.IO
 import akka.util.ByteString
 
 import akka.actor.IO.{ Iteratee }
+import java.nio.ByteBuffer
 
 // A lot of ideas from
 // https://github.com/derekjw/fyrie-redis/blob/master/src/main/scala/net/fyrie/redis/protocol/Iteratees.scala
@@ -14,8 +15,12 @@ case class BsonProtocolException(message: String) extends RuntimeException(messa
 // instead of defining a parallel enumeration or sealed trait/case objects,
 // just make these look like a type enum (of sorts)
 
-case class Document(length: Int, bytes: ByteString)
-sealed trait BsonElement
+//case class Document(length: Int, bytes: ByteString)
+case class Document(length: Int, es: List[BsonElement])
+sealed trait BsonElement { 
+  def toByteString: ByteString = throw new UnsupportedOperationException
+  def write(bb: ByteBuffer): Unit = throw new UnsupportedOperationException
+}
 case class BsonDouble(name: String, value: Double) extends BsonElement
 case class BsonString(name: String, value: String) extends BsonElement
 case class BsonDocument(name: String, value: Document) extends BsonElement
@@ -30,7 +35,7 @@ case class BsonNull(name: String) extends BsonElement
 //case class BsonDbPointer(name: String, value: ByteString) extends BsonElement
 case class BsonJsCode(name: String, value: String) extends BsonElement
 case class BsonSymbol(name: String, value: Symbol) extends BsonElement
-case class BsonJsCodeWithScope(name: String, value: String, scope: Document) extends BsonElement
+case class BsonJsCodeWithScope(name: String, value: String, scope: BsonDocument) extends BsonElement
 case class BsonInt32(name: String, value: Int) extends BsonElement
 //case class BsonTimestampe(name: String, value: Long) extends BsonElement
 case class BsonInt64(name: String, value: Long) extends BsonElement
@@ -91,20 +96,45 @@ object BsonIteratees {
     name <- readName
     value <- readInt32
   } yield BsonInt32(name, value)
+  
+  // btw - all vals in objects are final by default
+  val readStringElement = for {
+    name <- readName
+    value <- readCString
+  } yield BsonString(name, value)
 
 
-  final val readElement = for {
+  final val readElement/*: Iteratee[BsonElement] */ = for {
     elType <- IO take 1
-  } yield {
-    elType match {
-       case INT32 => readInt32Element
-    }
+    element <- iterOf(elType)
+  } yield element
+  
+  def iterOf(element: ByteString) = element match {
+    case INT32 => readInt32Element
+    case STRING => readStringElement
+    case DOCUMENT => readBsonDocument
   }
   
+  val readElementList = {
+    def step(es: List[BsonElement]): Iteratee[List[BsonElement]] = {
+      IO peek 1 flatMap {
+        case ZERO => IO take 1 flatMap { _ => IO.Done(es.reverse) }
+        case _ => readElement flatMap { e => step(e :: es) }
+      }
+    }
+    step(Nil)
+  }
+  
+  // see what happens when you omit the return type annotation...
+  val readBsonDocument: Iteratee[BsonDocument] = for {
+    name <- readName
+    value <- readDocument
+  } yield BsonDocument(name, value)
+  
 
-  final val readDocument = for {
+  val readDocument = for {
     docLength <- readInt32
-    docBytes  <- IO take (docLength - 4)
-  } yield Document(docLength, docBytes)
+    es <- readElementList
+  } yield Document(docLength, es)
 
 }
